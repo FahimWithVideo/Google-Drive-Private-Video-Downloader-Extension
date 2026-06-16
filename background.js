@@ -40,6 +40,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "getRequests") {
         sendResponse({ requests: capturedRequests });
     }
+    if (message.type === "getTabId") {
+        sendResponse({ tabId: sender.tab.id });
+    }
 });
 
 function cleanupTabResources(tabId) {
@@ -152,3 +155,12 @@ chrome.debugger.onEvent.addListener((debuggeeId, method, params) => {
         }
     }
 });
+
+function detectSource(url) {
+    if (url.includes('youtube') || url.includes('googlevideo')) {
+        return 'youtube';
+    } else if (url.includes('facebook') || url.includes('fbcdn')) {
+        return 'facebook';
+    }
+    return 'unknown';
+}
