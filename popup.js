@@ -1,17 +1,19 @@
 document.addEventListener("DOMContentLoaded", () => {
-    const header = document.querySelector('.header');
+    // ========== GOOGLE DRIVE TAB ==========
+    const driveHeader = document.getElementById('drive-header');
     const notDriveMessage = document.getElementById('notDriveMessage');
     const downloadContainer = document.getElementById('downloadContainer');
     const statusMessage = document.getElementById('statusMessage');
     const btnOn = document.getElementById('btnOn');
     const btnOff = document.getElementById('btnOff');
     const reloadBtn = document.querySelector('.reload-btn');
+    const downloadAllBtn = document.getElementById('downloadAllBtn');
 
     function updateUI(isEnabled) {
-    btnOn.disabled = isEnabled;
-    btnOff.disabled = !isEnabled;
-    reloadBtn.classList.toggle('active', isEnabled);
-	}
+        btnOn.disabled = isEnabled;
+        btnOff.disabled = !isEnabled;
+        reloadBtn.classList.toggle('active', isEnabled);
+    }
 
     function handleStateChange(newState) {
         chrome.storage.local.set({ extensionEnabled: newState }, () => {
@@ -20,8 +22,10 @@ document.addEventListener("DOMContentLoaded", () => {
             if (!newState) {
                 downloadContainer.innerHTML = '';
                 statusMessage.textContent = "Extension stopped.";
+                statusMessage.classList.remove('hidden');
                 setTimeout(() => {
-                    statusMessage.textContent = "Click ON to start extension.";
+                    statusMessage.textContent = "";
+                    statusMessage.classList.add('hidden');
                 }, 2000);
             }
 
@@ -43,89 +47,135 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    // Check if current tab is Google Drive
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         const tab = tabs[0];
-        if (!tab || !tab.url.startsWith('https://drive.google.com/')) {
-            header.classList.add('hidden');
-            downloadContainer.classList.add('hidden');
-            statusMessage.classList.add('hidden');
-            notDriveMessage.classList.remove('hidden');
-            return;
-        }
+        if (!tab) return;
 
-        header.classList.remove('hidden');
-        downloadContainer.classList.remove('hidden');
-        statusMessage.classList.remove('hidden');
-        notDriveMessage.classList.add('hidden');
+        const isGoogleDrive = tab.url && tab.url.startsWith('https://drive.google.com/');
 
-		chrome.storage.local.get(['extensionEnabled'], (result) => {
-			const isEnabled = result.extensionEnabled !== undefined ? result.extensionEnabled : false;
-			updateUI(isEnabled);
-		});
+        // Google Drive handling
+        if (isGoogleDrive) {
+            driveHeader.classList.remove('hidden');
+            downloadContainer.classList.remove('hidden');
+            notDriveMessage.classList.add('hidden');
 
-        btnOn.addEventListener('click', () => handleStateChange(true));
-        btnOff.addEventListener('click', () => handleStateChange(false));
-
-        reloadBtn.addEventListener('click', () => {
-            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-                if (tabs[0]?.id) {
-                    chrome.tabs.reload(tabs[0].id);
-                }
+            chrome.storage.local.get(['extensionEnabled'], (result) => {
+                const isEnabled = result.extensionEnabled !== undefined ? result.extensionEnabled : false;
+                updateUI(isEnabled);
             });
-        });
 
-        const activeTabId = tab.id;
-        setInterval(() => {
-            chrome.runtime.sendMessage({ type: "getRequests" }, (response) => {
-                if (response && response.requests) {
-                    const matchingRequests = [];
-                    for (const requestId in response.requests) {
-                        const req = response.requests[requestId];
-                        if (req.tabId === activeTabId && req.lastItagUrl && req.videoTitle) {
-                            matchingRequests.push(req);
+            btnOn.addEventListener('click', () => handleStateChange(true));
+            btnOff.addEventListener('click', () => handleStateChange(false));
+
+            reloadBtn.addEventListener('click', () => {
+                chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                    if (tabs[0]?.id) {
+                        chrome.tabs.reload(tabs[0].id);
+                    }
+                });
+            });
+
+            const activeTabId = tab.id;
+            setInterval(() => {
+                chrome.runtime.sendMessage({ type: "getRequests" }, (response) => {
+                    if (response && response.requests) {
+                        const matchingRequests = [];
+                        for (const requestId in response.requests) {
+                            const req = response.requests[requestId];
+                            if (req.tabId === activeTabId && req.lastItagUrl && req.videoTitle) {
+                                matchingRequests.push(req);
+                            }
+                        }
+                        if (matchingRequests.length > 0) {
+                            statusMessage.textContent = "";
+                            statusMessage.classList.add('hidden');
+                            downloadContainer.innerHTML = "";
+                            document.getElementById('downloadSummary').textContent = `${matchingRequests.length} ready to download`;
+                            document.getElementById('downloadSummary').classList.remove('hidden');
+                            downloadAllBtn.classList.remove('hidden');
+                            
+                            matchingRequests.forEach((req) => {
+                                const item = document.createElement("div");
+                                item.classList.add("video-item");
+
+                                const titleSpan = document.createElement("span");
+                                titleSpan.classList.add("video-title");
+                                titleSpan.textContent = req.videoTitle.length > 45
+                                    ? req.videoTitle.substring(0, 45) + "..." 
+                                    : req.videoTitle;
+                                titleSpan.title = req.videoTitle;
+
+                                const btn = document.createElement("button");
+                                btn.classList.add("download-btn");
+                                btn.innerHTML = "⬇";
+                                btn.addEventListener("click", () => {
+                                    chrome.downloads.download({
+                                        url: req.lastItagUrl,
+                                        filename: req.videoTitle
+                                    }, () => {
+                                        if (chrome.runtime.lastError) {
+                                            statusMessage.textContent = "❌ Download error";
+                                            statusMessage.classList.add('error', 'hidden');
+                                            statusMessage.classList.remove('hidden');
+                                        } else {
+                                            statusMessage.textContent = "✓ Download started!";
+                                            statusMessage.classList.remove('error', 'hidden');
+                                            setTimeout(() => {
+                                                statusMessage.classList.add('hidden');
+                                            }, 2000);
+                                        }
+                                    });
+                                });
+
+                                item.appendChild(titleSpan);
+                                item.appendChild(btn);
+                                downloadContainer.appendChild(item);
+                            });
+                            
+                            // Download All button event listener
+                            downloadAllBtn.onclick = () => {
+                                downloadAllBtn.disabled = true;
+                                statusMessage.textContent = "⬇ Downloading all videos...";
+                                statusMessage.classList.remove('error', 'hidden');
+                                let downloadCount = 0;
+                                let totalCount = matchingRequests.length;
+                                
+                                matchingRequests.forEach((req, index) => {
+                                    setTimeout(() => {
+                                        chrome.downloads.download({
+                                            url: req.lastItagUrl,
+                                            filename: req.videoTitle
+                                        }, () => {
+                                            downloadCount++;
+                                            if (downloadCount === totalCount) {
+                                                statusMessage.textContent = `✓ All ${totalCount} video(s) download started!`;
+                                                downloadAllBtn.disabled = false;
+                                                setTimeout(() => {
+                                                    statusMessage.classList.add('hidden');
+                                                }, 2000);
+                                            }
+                                        });
+                                    }, index * 500);
+                                });
+                            };
+                        } else {
+                            downloadAllBtn.classList.add('hidden');
+                            document.getElementById('downloadSummary').classList.add('hidden');
+                            chrome.storage.local.get(['extensionEnabled'], (result) => {
+                                if (result.extensionEnabled) {
+                                    statusMessage.textContent = "Waiting for video source... If not working reload the page.";
+                                    statusMessage.classList.remove('hidden');
+                                }
+                            });
                         }
                     }
-                    if (matchingRequests.length > 0) {
-                        statusMessage.textContent = "";
-                        downloadContainer.innerHTML = "";
-                        matchingRequests.forEach((req) => {
-                            const item = document.createElement("div");
-                            item.classList.add("video-item");
-
-                            const titleSpan = document.createElement("span");
-                            titleSpan.classList.add("video-title");
-                            titleSpan.textContent = req.videoTitle.length > 35
-                                ? req.videoTitle.substring(0, 35) + "..." 
-                                : req.videoTitle;
-
-                            const btn = document.createElement("button");
-                            btn.classList.add("download-btn");
-                            btn.innerHTML = "⬇";
-                            btn.addEventListener("click", () => {
-                                chrome.downloads.download({
-                                    url: req.lastItagUrl,
-                                    filename: req.videoTitle
-                                }, () => {
-                                    if (chrome.runtime.lastError) {
-                                        statusMessage.textContent = "Can't able to download";
-                                        statusMessage.classList.add("error");
-                                    }
-                                });
-                            });
-
-                            item.appendChild(titleSpan);
-                            item.appendChild(btn);
-                            downloadContainer.appendChild(item);
-                        });
-                    } else {
-                        chrome.storage.local.get(['extensionEnabled'], (result) => {
-                            if (result.extensionEnabled) {
-                                statusMessage.textContent = "Waiting for new video source. If not working reload the page.";
-                            }
-                        });
-                    }
-                }
-            });
-        }, 1000);
+                });
+            }, 1000);
+        } else {
+            driveHeader.classList.add('hidden');
+            downloadContainer.classList.add('hidden');
+            notDriveMessage.classList.remove('hidden');
+        }
     });
 });
